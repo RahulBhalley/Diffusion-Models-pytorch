@@ -4,6 +4,7 @@ import torch.nn as nn
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 from torch import optim
+from torch.cuda.amp import GradScaler, autocast
 from utils import *
 from modules import UNet
 import logging
@@ -98,13 +99,13 @@ def train(args):
     dataloader = get_data(args)
     model = UNet(device=device).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr)
-    mse = nn.MSELoss()
-    # mse = nn.L1Loss()
+    mse = nn.L1Loss()
     diffusion = Diffusion(img_size=args.image_size, device=device)
     logger = SummaryWriter(os.path.join("runs", args.run_name))
     l = len(dataloader)
 
     accumulation_steps = args.accumulation_steps
+    scaler = GradScaler()   # Initialize the GradScaler for mixed precision
 
     for epoch in range(args.epochs):
         logging.info(f"Starting epoch {epoch}:")
@@ -115,15 +116,19 @@ def train(args):
             images = images.to(device)
             t = diffusion.sample_timesteps(images.shape[0]).to(device)
             x_t, noise = diffusion.noise_images(images, t)
-            predicted_noise = model(x_t, t)
-            loss = mse(noise, predicted_noise)
 
-            # Accumulate gradients
-            loss = loss / accumulation_steps
-            loss.backward()
+            # Use autocast to automatically handle mixed precision
+            with autocast():
+                predicted_noise = model(x_t, t)
+                loss = mse(noise, predicted_noise)
+
+            # Scale the loss to avoid underflow/overflow issues
+            scaler.scale(loss).backward()
 
             if (i + 1) % accumulation_steps == 0:
-                optimizer.step()
+                # Unscales the gradients and updates the model
+                scaler.step(optimizer)
+                scaler.update()
                 optimizer.zero_grad()
 
             total_loss += loss.item()
