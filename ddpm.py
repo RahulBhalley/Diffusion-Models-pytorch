@@ -155,7 +155,7 @@ def launch():
     parser.add_argument('--device', type=str, default="mps")
     parser.add_argument('--lr', type=float, default=3e-4)
     args = parser.parse_args()
-    train(args)
+    train_old(args)
 
 
 if __name__ == '__main__':
