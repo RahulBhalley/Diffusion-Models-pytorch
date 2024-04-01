@@ -13,7 +13,7 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s: %(message)s", level=log
 
 
 class Diffusion:
-    def __init__(self, noise_steps=1000, beta_start=1e-4, beta_end=0.02, img_size=256, device="cuda"):
+    def __init__(self, noise_steps=1000, beta_start=1e-4, beta_end=0.02, img_size=256, device="cpu"):
         self.noise_steps = noise_steps
         self.beta_start = beta_start
         self.beta_end = beta_end
@@ -39,7 +39,7 @@ class Diffusion:
     def sample(self, model, n):
         logging.info(f"Sampling {n} new images....")
         model.eval()
-        with torch.no_grad():
+        with torch.inference_mode():
             x = torch.randn((n, 3, self.img_size, self.img_size)).to(self.device)
             for i in tqdm(reversed(range(1, self.noise_steps)), position=0):
                 t = (torch.ones(n) * i).long().to(self.device)
@@ -58,13 +58,14 @@ class Diffusion:
         return x
 
 
-def train(args):
+def train_old(args):
     setup_logging(args.run_name)
     device = args.device
     dataloader = get_data(args)
-    model = UNet().to(device)
+    model = UNet(device=device).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr)
-    mse = nn.MSELoss()
+    # mse = nn.MSELoss()
+    mse = nn.L1Loss()
     diffusion = Diffusion(img_size=args.image_size, device=device)
     logger = SummaryWriter(os.path.join("runs", args.run_name))
     l = len(dataloader)
@@ -91,31 +92,89 @@ def train(args):
         torch.save(model.state_dict(), os.path.join("models", args.run_name, f"ckpt.pt"))
 
 
+def train(args):
+    setup_logging(args.run_name)
+    device = args.device
+    dataloader = get_data(args)
+    model = UNet(device=device).to(device)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr)
+    mse = nn.MSELoss()
+    # mse = nn.L1Loss()
+    diffusion = Diffusion(img_size=args.image_size, device=device)
+    logger = SummaryWriter(os.path.join("runs", args.run_name))
+    l = len(dataloader)
+
+    accumulation_steps = args.accumulation_steps
+
+    for epoch in range(args.epochs):
+        logging.info(f"Starting epoch {epoch}:")
+        pbar = tqdm(dataloader)
+        total_loss = 0.0
+
+        for i, (images, _) in enumerate(pbar):
+            images = images.to(device)
+            t = diffusion.sample_timesteps(images.shape[0]).to(device)
+            x_t, noise = diffusion.noise_images(images, t)
+            predicted_noise = model(x_t, t)
+            loss = mse(noise, predicted_noise)
+
+            # Accumulate gradients
+            loss = loss / accumulation_steps
+            loss.backward()
+
+            if (i + 1) % accumulation_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+
+            total_loss += loss.item()
+            pbar.set_postfix(MSE=total_loss / (i + 1))
+
+            logger.add_scalar("MSE", loss.item(), global_step=epoch * l + i)
+
+        sampled_images = diffusion.sample(model, n=images.shape[0])
+        save_images(sampled_images, os.path.join("results", args.run_name, f"{epoch}.jpg"))
+        torch.save(model.state_dict(), os.path.join("models", args.run_name, f"ckpt.pt"))
+
+
 def launch():
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument('--run_name', type=str, default="DDPM_Unconditional")
+    parser.add_argument('--epochs', type=int, default=500)
+    parser.add_argument('--batch_size', type=int, default=2)  # Adjust batch size as needed
+    parser.add_argument('--accumulation_steps', type=int, default=16)  # Set the number of gradient accumulation steps
+    parser.add_argument('--image_size', type=int, default=64)
+    parser.add_argument('--dataset_path', type=str, default="./dataset")
+    parser.add_argument('--device', type=str, default="mps")
+    parser.add_argument('--lr', type=float, default=3e-4)
     args = parser.parse_args()
-    args.run_name = "DDPM_Uncondtional"
-    args.epochs = 500
-    args.batch_size = 12
-    args.image_size = 64
-    args.dataset_path = r"C:\Users\dome\datasets\landscape_img_folder"
-    args.device = "cuda"
-    args.lr = 3e-4
     train(args)
 
 
 if __name__ == '__main__':
     launch()
-    # device = "cuda"
-    # model = UNet().to(device)
-    # ckpt = torch.load("./working/orig/ckpt.pt")
+
+    # device = "cpu"
+    # model = UNet(device=device).to(device)
+    # ckpt = torch.load("./DDPM/unconditional_ckpt.pt", map_location=device)
     # model.load_state_dict(ckpt)
     # diffusion = Diffusion(img_size=64, device=device)
-    # x = diffusion.sample(model, 8)
+    # x = diffusion.sample(model, n=1)
     # print(x.shape)
+
+    # Plot
     # plt.figure(figsize=(32, 32))
     # plt.imshow(torch.cat([
     #     torch.cat([i for i in x.cpu()], dim=-1),
     # ], dim=-2).permute(1, 2, 0).cpu())
     # plt.show()
+
+    # Save as image
+    # Assuming 'x' contains the image data (tensor)
+    # image_data = torch.cat([i for i in x.cpu()], dim=-1).permute(1, 2, 0).cpu()
+
+    # # Create a PIL image from the tensor
+    # pil_image = Image.fromarray(image_data.numpy())
+
+    # # Save the PIL image
+    # pil_image.save("output_image.png")

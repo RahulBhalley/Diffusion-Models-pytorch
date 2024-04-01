@@ -14,7 +14,7 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s: %(message)s", level=log
 
 
 class Diffusion:
-    def __init__(self, noise_steps=1000, beta_start=1e-4, beta_end=0.02, img_size=256, device="cuda"):
+    def __init__(self, noise_steps=1000, beta_start=1e-4, beta_end=0.02, img_size=256, device="cpu"):
         self.noise_steps = noise_steps
         self.beta_start = beta_start
         self.beta_end = beta_end
@@ -41,7 +41,7 @@ class Diffusion:
     def sample(self, model, n, labels, cfg_scale=3):
         logging.info(f"Sampling {n} new images....")
         model.eval()
-        with torch.no_grad():
+        with torch.inference_mode():
             x = torch.randn((n, 3, self.img_size, self.img_size)).to(self.device)
             for i in tqdm(reversed(range(1, self.noise_steps)), position=0):
                 t = (torch.ones(n) * i).long().to(self.device)
@@ -112,27 +112,27 @@ def train(args):
 def launch():
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument('--run_name', type=str, default="DDPM_conditional")
+    parser.add_argument('--epochs', type=int, default=300)
+    parser.add_argument('--batch_size', type=int, default=14)
+    parser.add_argument('--image_size', type=int, default=64)
+    parser.add_argument('--num_classes', type=int, default=10)
+    parser.add_argument('--dataset_path', type=str, default=r"./dataset")
+    parser.add_argument('--device', type=str, default="cpu")
+    parser.add_argument('--lr', type=float, default=3e-4)
     args = parser.parse_args()
-    args.run_name = "DDPM_conditional"
-    args.epochs = 300
-    args.batch_size = 14
-    args.image_size = 64
-    args.num_classes = 10
-    args.dataset_path = r"C:\Users\dome\datasets\cifar10\cifar10-64\train"
-    args.device = "cuda"
-    args.lr = 3e-4
     train(args)
 
 
 if __name__ == '__main__':
-    launch()
-    # device = "cuda"
-    # model = UNet_conditional(num_classes=10).to(device)
-    # ckpt = torch.load("./models/DDPM_conditional/ckpt.pt")
-    # model.load_state_dict(ckpt)
-    # diffusion = Diffusion(img_size=64, device=device)
-    # n = 8
-    # y = torch.Tensor([6] * n).long().to(device)
-    # x = diffusion.sample(model, n, y, cfg_scale=0)
-    # plot_images(x)
+    # launch()
+    device = "cpu"
+    model = UNet_conditional(num_classes=10).to(device)
+    ckpt = torch.load("./DDPM/conditional_ema_ckpt.pt", map_location=device)
+    model.load_state_dict(ckpt)
+    diffusion = Diffusion(img_size=64, device=device)
+    n = 1
+    y = torch.Tensor([6] * n).long().to(device)
+    x = diffusion.sample(model, n, y, cfg_scale=0)
+    plot_images(x)
 
